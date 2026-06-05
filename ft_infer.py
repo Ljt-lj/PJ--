@@ -11,7 +11,7 @@ from pathlib import Path
 import torch
 from peft import PeftModel
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, StoppingCriteria, StoppingCriteriaList
 
 from cot_core import answers_equal, normalize_question
 from ft_utils import (
@@ -20,8 +20,23 @@ from ft_utils import (
     build_training_prefix,
     find_latest_checkpoint,
     format_ft_prediction,
+    generation_stop_strings,
     resolve_model_dir,
 )
+
+
+class StopOnSubstrings(StoppingCriteria):
+    def __init__(self, stops: list[str], tokenizer, prompt_len: int):
+        self.stops = stops
+        self.tokenizer = tokenizer
+        self.prompt_len = prompt_len
+
+    def __call__(self, input_ids, scores, **kwargs) -> bool:
+        new_ids = input_ids[0, self.prompt_len :]
+        if new_ids.numel() == 0:
+            return False
+        text = self.tokenizer.decode(new_ids, skip_special_tokens=True)
+        return any(s in text for s in self.stops)
 
 
 def require_gpu() -> None:
@@ -59,14 +74,17 @@ def load_model(checkpoint: Path, base_dir: Path | None = None):
 def predict(model, tokenizer, instruction: str, question: str, max_new_tokens: int) -> str:
     prompt = build_training_prefix(tokenizer, instruction, question)
     inputs = tokenizer([prompt], return_tensors="pt").to(model.device)
+    prompt_len = inputs["input_ids"].shape[1]
+    stops = generation_stop_strings()
     out = model.generate(
         **inputs,
         max_new_tokens=max_new_tokens,
         do_sample=False,
         pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
         eos_token_id=tokenizer.eos_token_id,
+        stopping_criteria=StoppingCriteriaList([StopOnSubstrings(stops, tokenizer, prompt_len)]),
     )
-    gen_ids = out[0][inputs["input_ids"].shape[1] :]
+    gen_ids = out[0][prompt_len:]
     return tokenizer.decode(gen_ids, skip_special_tokens=True)
 
 
@@ -127,7 +145,7 @@ def main() -> None:
     parser.add_argument("--dev", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=Path("submit.csv"))
     parser.add_argument("--report", type=Path, default=None)
-    parser.add_argument("--max-new-tokens", type=int, default=32)
+    parser.add_argument("--max-new-tokens", type=int, default=16)
     parser.add_argument("--with-header", action="store_true", help="Write CSV header row")
     args = parser.parse_args()
 

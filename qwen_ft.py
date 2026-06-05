@@ -60,6 +60,7 @@ def make_process_func(tokenizer, max_length: int):
         prefix_ids = tokenizer(prefix, add_special_tokens=False)
         answer_ids = tokenizer(answer, add_special_tokens=False)
         pad_id = tokenizer.pad_token_id or tokenizer.eos_token_id
+        eos_id = tokenizer.eos_token_id or pad_id
 
         answer_len = len(answer_ids["input_ids"]) + 1
         prefix_len = len(prefix_ids["input_ids"])
@@ -70,9 +71,9 @@ def make_process_func(tokenizer, max_length: int):
             prefix_ids = {k: v[-budget:] for k, v in prefix_ids.items()}
             prefix_len = len(prefix_ids["input_ids"])
 
-        input_ids = prefix_ids["input_ids"] + answer_ids["input_ids"] + [pad_id]
+        input_ids = prefix_ids["input_ids"] + answer_ids["input_ids"] + [eos_id]
         attention_mask = prefix_ids["attention_mask"] + answer_ids["attention_mask"] + [1]
-        labels = [-100] * prefix_len + answer_ids["input_ids"] + [pad_id]
+        labels = [-100] * prefix_len + answer_ids["input_ids"] + [eos_id]
 
         return {
             "input_ids": input_ids,

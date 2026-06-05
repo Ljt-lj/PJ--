@@ -42,25 +42,24 @@ def build_training_prefix(tokenizer, instruction: str, question: str) -> str:
 IM_END = "<|" + "im_end|>"
 IM_START = "<|" + "im_start|>"
 
-# Model may hallucinate another chat turn after the numeric answer.
-ROLE_MARKERS = (
-    "Human:", "human:", "Human", "Assistant:", "assistant:", "Assista",
-    "用户:", "user:", "User:", IM_START,
+# Model may append a fake next turn after the answer, e.g. "37Human: ...".
+ROLE_TAIL = re.compile(
+    r"(?:Human|Assistant|用户)[:：].*$|" + re.escape(IM_START) + r".*$",
+    re.IGNORECASE,
 )
 
 
 def _strip_role_hallucination(text: str) -> str:
-    for marker in ROLE_MARKERS:
-        pos = text.find(marker)
-        if pos > 0:
-            text = text[:pos]
-        elif pos == 0:
-            return ""
+    """Drop hallucinated follow-up chat; keep the leading answer intact."""
+    text = ROLE_TAIL.sub("", text).strip()
+    # Glued without space: "20000Human: ..."
+    text = re.sub(r"Human:.*$", "", text, flags=re.IGNORECASE).strip()
+    text = re.sub(r"Assistant:.*$", "", text, flags=re.IGNORECASE).strip()
     return text
 
 
 def format_ft_prediction(raw: str, question: str) -> str:
-    """Keep only the leading direct answer from SFT output."""
+    """Format direct-answer SFT output (match Math_Solver infer.py)."""
     text = str(raw).strip()
     for stop in (IM_END, "<|endoftext|>", IM_START):
         text = text.split(stop)[0].strip()
@@ -68,18 +67,7 @@ def format_ft_prediction(raw: str, question: str) -> str:
     text = text.replace("\n", " ").strip()
     if not text:
         return "0"
-    # Direct SFT: answer is usually the first token (e.g. 37, 4/5, 18.8%)
-    m = re.match(r"^([+-]?\d+(?:\.\d+)?(?:/\d+)?%?)", text)
-    if m:
-        return format_submit_answer(question, m.group(1))
-    nums = re.findall(r"([+-]?\d+(?:\.\d+)?(?:/\d+)?%?)", text)
-    if nums:
-        return format_submit_answer(question, nums[0])
-    return "0"
-
-
-def generation_stop_strings() -> list[str]:
-    return ["Human:", "Assistant:", "用户:", IM_START, "\nHuman", "\nAssistant"]
+    return format_submit_answer(question, text)
 
 
 def find_latest_checkpoint(output_dir: Path) -> Path:

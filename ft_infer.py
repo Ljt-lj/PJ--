@@ -20,7 +20,7 @@ from peft import PeftModel
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from cot_core import answers_equal, normalize_question
+from cot_core import answers_equal, extract_answer, normalize_question
 from ft_utils import (
     DEFAULT_INSTRUCTION,
     DEFAULT_MODEL_ID,
@@ -38,21 +38,39 @@ def require_gpu() -> None:
         sys.exit(1)
 
 
-def load_model(base_dir: Path, checkpoint: Path):
+def load_model(checkpoint: Path, base_dir: Path | None = None):
+    """Load merged/full weights, or LoRA adapter on base."""
     dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-    tokenizer = AutoTokenizer.from_pretrained(base_dir, trust_remote_code=True, use_fast=False)
-    base = AutoModelForCausalLM.from_pretrained(
-        base_dir,
-        torch_dtype=dtype,
-        device_map="auto",
-        trust_remote_code=True,
-    )
-    if (checkpoint / "adapter_config.json").exists() or checkpoint.name.startswith("checkpoint"):
+
+    if (checkpoint / "adapter_config.json").exists():
+        if base_dir is None:
+            raise ValueError("base_dir required for LoRA adapter checkpoint")
+        tokenizer = AutoTokenizer.from_pretrained(base_dir, trust_remote_code=True, use_fast=False)
+        base = AutoModelForCausalLM.from_pretrained(
+            base_dir,
+            torch_dtype=dtype,
+            device_map="auto",
+            trust_remote_code=True,
+        )
         model = PeftModel.from_pretrained(base, str(checkpoint))
-    else:
-        model = base
-    model.eval()
-    return model, tokenizer
+        model.eval()
+        return model, tokenizer
+
+    if (checkpoint / "config.json").exists():
+        tokenizer = AutoTokenizer.from_pretrained(checkpoint, trust_remote_code=True, use_fast=False)
+        model = AutoModelForCausalLM.from_pretrained(
+            checkpoint,
+            torch_dtype=dtype,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+        model.eval()
+        return model, tokenizer
+
+    raise FileNotFoundError(
+        f"Unrecognized checkpoint layout: {checkpoint} "
+        "(expected adapter_config.json or config.json)"
+    )
 
 
 @torch.inference_mode()
@@ -94,7 +112,11 @@ def run_rows(
         instruction = str(row.get("instruction") or DEFAULT_INSTRUCTION)
         question = normalize_question(row["question"])
         raw = predict(model, tokenizer, instruction, question, max_new_tokens)
-        pred = clean_model_output(raw, question)
+        pred = extract_answer(raw)
+        if not pred or pred == "0":
+            pred = clean_model_output(raw, question)
+        else:
+            pred = clean_model_output(pred, question)
         preds[sid] = pred
         if has_labels:
             gold = str(row["answer"]).strip()
@@ -131,7 +153,7 @@ def main() -> None:
     parser.add_argument("--dev", type=Path, default=None, help="Optional labeled JSON for accuracy")
     parser.add_argument("--output", type=Path, default=Path("submit.csv"))
     parser.add_argument("--report", type=Path, default=None)
-    parser.add_argument("--max-new-tokens", type=int, default=32)
+    parser.add_argument("--max-new-tokens", type=int, default=64)
     args = parser.parse_args()
 
     require_gpu()
@@ -144,7 +166,7 @@ def main() -> None:
     print(f"Checkpoint: {checkpoint}")
 
     base_dir = args.base_model or resolve_model_dir(args.model_id, args.cache_dir)
-    model, tokenizer = load_model(base_dir, checkpoint)
+    model, tokenizer = load_model(checkpoint, base_dir if (checkpoint / "adapter_config.json").exists() else None)
 
     if args.dev and args.dev.exists():
         dev_rows = load_json_rows(args.dev)

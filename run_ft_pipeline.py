@@ -57,7 +57,12 @@ def main() -> None:
         train_cmd.extend(extra)
         run(train_cmd)
 
-    ckpt = args.output_dir / ("merged" if args.merge_lora and (args.output_dir / "merged").exists() else "final")
+    ckpt = args.output_dir / "merged"
+    if not (args.merge_lora and ckpt.exists()):
+        ckpt = args.output_dir / "final"
+        if not ckpt.exists():
+            from ft_utils import find_latest_checkpoint
+            ckpt = find_latest_checkpoint(args.output_dir)
     infer_cmd = [
         py,
         str(root / "ft_infer.py"),

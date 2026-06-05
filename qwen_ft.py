@@ -32,7 +32,7 @@ from transformers import (
     TrainingArguments,
 )
 
-from ft_utils import DEFAULT_MODEL_ID, IM_END, normalize_sample, resolve_model_dir
+from ft_utils import DEFAULT_MODEL_ID, build_chat_messages, normalize_sample, resolve_model_dir
 
 
 def require_gpu() -> None:
@@ -69,13 +69,10 @@ def load_train_rows(path: Path, dev_size: int, seed: int) -> tuple[list[dict], l
 
 
 def make_process_func(tokenizer, max_length: int):
-    im_start = "<|im_start|>"
-
     def process(example: dict) -> dict:
-        prefix = (
-            f"{im_start}system\n{example['instruction']}{IM_END}\n"
-            f"{im_start}user\n{example['question']}{IM_END}\n"
-            f"{im_start}assistant\n"
+        messages = build_chat_messages(example["instruction"], example["question"])
+        prefix = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
         )
         answer = example["answer"]
         prefix_ids = tokenizer(prefix, add_special_tokens=False)

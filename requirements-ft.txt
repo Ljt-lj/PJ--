@@ -1,5 +1,6 @@
 # GPU fine-tuning dependencies (install on cloud GPU machine)
-torch>=2.1.0
+# NOTE: Do NOT `pip install torch` here if using ModelScope AMD ROCm images —
+#       the image already ships ROCm PyTorch. Installing cu121 will break GPU.
 transformers>=4.40.0
 peft>=0.10.0
 datasets>=2.18.0

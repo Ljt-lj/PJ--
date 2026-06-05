@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Diagnose GPU / PyTorch CUDA availability before fine-tuning."""
+"""Diagnose GPU (NVIDIA CUDA or AMD ROCm) before fine-tuning."""
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -15,47 +16,76 @@ def run(cmd: list[str]) -> str:
         return f"(failed: {exc})"
 
 
-def main() -> None:
-    print("=== GPU environment check ===\n")
-
+def detect_backend() -> str:
     if shutil.which("nvidia-smi"):
+        return "nvidia"
+    if shutil.which("rocm-smi") or os.environ.get("ROCM_PATH"):
+        return "rocm"
+    return "unknown"
+
+
+def main() -> None:
+    backend = detect_backend()
+    print("=== GPU environment check ===\n")
+    print(f"Detected backend: {backend.upper() if backend != 'unknown' else 'UNKNOWN'}\n")
+
+    if backend == "nvidia":
         print("nvidia-smi:\n", run(["nvidia-smi", "-L"]), sep="")
+    elif backend == "rocm":
+        print("rocm-smi:\n", run(["rocm-smi", "--showmeminfo"]), sep="")
+        print(
+            "\nNote: This is an **AMD GPU + ROCm** environment.\n"
+            "  nvidia-smi will NOT work here — that tool is NVIDIA-only.\n"
+            "  Use rocm-smi to inspect AMD GPUs."
+        )
     else:
         print("nvidia-smi: NOT FOUND")
-        print("  -> Machine likely has no GPU driver, or you picked a CPU-only instance.")
-        print("  -> In PAI-DSW / AutoDL / ModelScope: switch to a GPU spec (T4/A10/3090 etc.).")
+        print("rocm-smi:   NOT FOUND")
+        print("  -> CPU-only instance, or GPU drivers not loaded.")
 
     print()
     try:
         import torch
     except ImportError:
         print("torch: NOT INSTALLED")
-        print("  pip install torch --index-url https://download.pytorch.org/whl/cu121")
+        if backend == "rocm":
+            print("  On ModelScope AMD images, do NOT pip install cu121 torch.")
+            print("  Use the preinstalled ROCm PyTorch from the system image.")
+        else:
+            print("  pip install torch --index-url https://download.pytorch.org/whl/cu121")
         sys.exit(1)
 
-    print(f"torch version:     {torch.__version__}")
+    print(f"torch version:      {torch.__version__}")
     print(f"torch.version.cuda: {torch.version.cuda}")
-    print(f"cuda available:    {torch.cuda.is_available()}")
-    print(f"cuda device count: {torch.cuda.device_count()}")
+    print(f"torch.cuda.is_available(): {torch.cuda.is_available()}")
+    print(f"device count:       {torch.cuda.device_count()}")
 
     if torch.cuda.is_available():
         for i in range(torch.cuda.device_count()):
             print(f"  [{i}] {torch.cuda.get_device_name(i)}")
-        print("\nOK — you can run: python run_ft_pipeline.py --merge-lora")
+        if backend == "rocm":
+            print("\nOK (ROCm) — PyTorch uses the 'cuda' API name but runs on AMD via HIP.")
+        else:
+            print("\nOK (CUDA) — you can run: python run_ft_pipeline.py --merge-lora")
         return
 
-    print("\nCUDA NOT usable by PyTorch. Common fixes:\n")
-    if torch.version.cuda is None:
-        print("1. You installed CPU-only PyTorch. Reinstall GPU build, e.g.:")
-        print("   pip uninstall -y torch torchvision torchaudio")
-        print("   pip install torch --index-url https://download.pytorch.org/whl/cu121")
-        print("   # if driver is CUDA 11.8, use cu118 instead of cu121")
-    else:
-        print("1. PyTorch has CUDA build but runtime failed — check driver vs torch CUDA version.")
-        print("2. Reinstall matching wheel (cu118 / cu121 / cu124).")
+    print("\nGPU NOT usable by PyTorch.\n")
 
-    print("3. Confirm nvidia-smi works in the same shell/venv.")
-    print("4. On 魔搭 DSW: create/switch to **GPU** 实例，镜像选 PyTorch + CUDA。")
+    if backend == "rocm":
+        print("AMD/ROCm fixes:")
+        print("1. Do NOT install NVIDIA CUDA wheels (cu121/cu118).")
+        print("2. Remove wrong torch and use image default:")
+        print("   pip uninstall -y torch torchvision torchaudio")
+        print("   pip install torch  # or exit venv and use system PyTorch 2.9.1+rocm")
+        print("3. Prefer: train outside .venv-ft, or recreate venv with:")
+        print("   python -m venv .venv-ft --system-site-packages")
+        print("4. Verify: python -c \"import torch; print(torch.cuda.is_available())\"")
+    elif backend == "nvidia":
+        print("NVIDIA fixes:")
+        print("   pip uninstall -y torch && pip install torch --index-url https://download.pytorch.org/whl/cu121")
+    else:
+        print("Switch to a GPU instance (NVIDIA CUDA or AMD ROCm).")
+
     sys.exit(1)
 
 

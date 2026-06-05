@@ -2,7 +2,7 @@
 """
 LoRA fine-tune Qwen2.5-0.5B-Instruct on train.json (competition baseline style).
 
-Requires NVIDIA GPU (CUDA). CPU-only training is not supported in practice.
+Requires GPU (NVIDIA CUDA or AMD ROCm). CPU-only training is not supported in practice.
 
 Example (cloud GPU):
   pip install -r requirements-ft.txt
@@ -42,14 +42,13 @@ def require_gpu() -> None:
         print(f"GPU: {name} ({mem_gb:.1f} GB VRAM)")
         return
 
-    print("ERROR: CUDA GPU not detected.", file=sys.stderr)
+    print("ERROR: No GPU detected by PyTorch (torch.cuda.is_available()=False).", file=sys.stderr)
     print(f"  torch={torch.__version__}, torch.version.cuda={torch.version.cuda}", file=sys.stderr)
     print(
-        "LoRA fine-tuning needs a GPU (>= 6GB VRAM).\n"
         "Run:  python check_gpu.py\n"
-        "Fix:  pip uninstall -y torch && pip install torch --index-url https://download.pytorch.org/whl/cu121\n"
-        "      (use cu118 if nvidia-smi shows CUDA 11.x)\n"
-        "Also: ensure the cloud instance is GPU type (PAI-DSW / AutoDL / ModelScope GPU 规格).",
+        "NVIDIA: pip install torch --index-url https://download.pytorch.org/whl/cu121\n"
+        "AMD ROCm (魔搭 DSW): do NOT install cu121; use image PyTorch or --system-site-packages venv.\n"
+        "      nvidia-smi will fail on AMD — use rocm-smi instead.",
         file=sys.stderr,
     )
     sys.exit(1)

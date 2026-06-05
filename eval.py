@@ -209,6 +209,11 @@ def main() -> None:
     parser.add_argument("--num-predict", type=int, default=None)
     parser.add_argument("--score-only", action="store_true")
     parser.add_argument("--rebuild-dev", action="store_true")
+    parser.add_argument(
+        "--build-dev-only",
+        action="store_true",
+        help="Only build dev.json from train.json, then exit",
+    )
     parser.add_argument("--download-train", action="store_true")
     parser.add_argument("--show-errors", type=int, default=10)
     args = parser.parse_args()
@@ -219,19 +224,23 @@ def main() -> None:
         elif args.download_train:
             download_train(args.train)
 
+    if args.rebuild_dev or args.build_dev_only or (not args.score_only and not args.dev.exists()):
+        train_data = load_train(args.train)
+        build_dev_split(
+            train_data,
+            size=args.dev_size,
+            seed=args.seed,
+            dev_path=args.dev,
+        )
+        if args.build_dev_only:
+            print(f"Done. Dev split -> {args.dev}")
+            return
+
     if args.score_only:
         if not args.dev.exists():
             raise FileNotFoundError(f"Missing dev split: {args.dev}")
         dev_data = load_dev(args.dev)
     else:
-        train_data = load_train(args.train)
-        if args.rebuild_dev or not args.dev.exists():
-            build_dev_split(
-                train_data,
-                size=args.dev_size,
-                seed=args.seed,
-                dev_path=args.dev,
-            )
         dev_data = load_dev(args.dev)
 
     if args.limit > 0:

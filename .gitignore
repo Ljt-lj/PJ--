@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 venv/
 submit.csv
+submit.csv.checkpoint.jsonl
 submit_cot.csv
 eval_preds.csv
 dev.json

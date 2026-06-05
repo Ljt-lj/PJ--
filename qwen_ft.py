@@ -36,17 +36,23 @@ from ft_utils import DEFAULT_MODEL_ID, IM_END, normalize_sample, resolve_model_d
 
 
 def require_gpu() -> None:
-    if not torch.cuda.is_available():
-        print(
-            "ERROR: CUDA GPU not detected.\n"
-            "LoRA fine-tuning for 12k samples needs a GPU (recommended >= 6GB VRAM).\n"
-            "Use a cloud GPU (AutoDL / ModelScope Notebook / Colab) and run this script there.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    name = torch.cuda.get_device_name(0)
-    mem_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-    print(f"GPU: {name} ({mem_gb:.1f} GB VRAM)")
+    if torch.cuda.is_available():
+        name = torch.cuda.get_device_name(0)
+        mem_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        print(f"GPU: {name} ({mem_gb:.1f} GB VRAM)")
+        return
+
+    print("ERROR: CUDA GPU not detected.", file=sys.stderr)
+    print(f"  torch={torch.__version__}, torch.version.cuda={torch.version.cuda}", file=sys.stderr)
+    print(
+        "LoRA fine-tuning needs a GPU (>= 6GB VRAM).\n"
+        "Run:  python check_gpu.py\n"
+        "Fix:  pip uninstall -y torch && pip install torch --index-url https://download.pytorch.org/whl/cu121\n"
+        "      (use cu118 if nvidia-smi shows CUDA 11.x)\n"
+        "Also: ensure the cloud instance is GPU type (PAI-DSW / AutoDL / ModelScope GPU 规格).",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 def load_train_rows(path: Path, dev_size: int, seed: int) -> tuple[list[dict], list[dict] | None]:

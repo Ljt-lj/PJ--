@@ -5,6 +5,12 @@ from __future__ import annotations
 import re
 from collections import Counter
 
+# Best validated on dev-50 (seed=42, Qwen2.5-0.5B via Ollama):
+#   prompt_mode=compact, temperature=0.0, top_p=1.0  ->  36% accuracy
+BEST_PROMPT_MODE = "compact"
+BEST_TEMPERATURE = 0.0
+BEST_TOP_P = 1.0
+
 BASE_FEW_SHOT = """\
 示例1（四则运算）：
 问题：商店有4框苹果，每框55千克，已经卖出135千克，还剩多少千克苹果?
@@ -61,17 +67,13 @@ TAG_FEW_SHOT: dict[str, str] = {
 
 TAG_RULES: list[tuple[str, re.Pattern[str]]] = [
     ("fraction", re.compile(r"分之|[\d]+/[\d]+|分数")),
-    ("decimal", re.compile(r"\d+\.\d+|比例尺")),
-    ("percent", re.compile(r"利率|利润率|百分|出油率|税费|税后")),
-    ("geometry", re.compile(r"梯形|三角形|圆环|圆形|面积|周长|体积|直径|半径")),
-    ("at_least", re.compile(r"至少|最少|不少于|够不够|能不能一次")),
-    ("at_most", re.compile(r"至多|最多|不超过|最多能|最多可|能买几|可以买多少")),
-    ("average", re.compile(r"平均|均值|每分钟|每小时|每时")),
+    ("decimal", re.compile(r"\d+\.\d+")),
+    ("at_least", re.compile(r"至少|最少|不少于")),
+    ("at_most", re.compile(r"至多|最多|不超过|最多能|最多可")),
+    ("average", re.compile(r"平均|均值")),
     ("ratio", re.compile(r"比.*(?:多|少|是)|倍数|倍")),
-    ("unit_convert", re.compile(r"千米|厘米|毫米|分米|小时|分钟|吨|千克|克|升|毫升|元|角|分")),
+    ("unit_convert", re.compile(r"千米|厘米|毫米|小时|分钟|吨|千克|克|升|毫升|元|角|分")),
     ("remainder", re.compile(r"余|剩下|剩余|还剩")),
-    ("work", re.compile(r"独做|合做|工程")),
-    ("approximate", re.compile(r"大约|约.*(?:多少|要花)")),
 ]
 
 RULES_TEXT = """\
@@ -155,30 +157,18 @@ def build_system_prompt(question: str | list, *, compact: bool = False) -> str:
 
 
 def build_compact_prompt(question: str | list) -> str:
-    text = normalize_question(question)
+    """Compact CoT prompt — best profile on dev-50 (36% with greedy decoding)."""
     tags = classify_question(question)
     hints: list[str] = []
-
-    if re.search(r"比例尺", text):
-        hints.append("比例尺：实际距离=图上厘米×比例，100000厘米=1千米")
     if "at_least" in tags:
-        hints.append("「至少/最少」：所有人数都计入，除有余数则+1")
-    elif "at_most" in tags:
-        hints.append("「至多/能买几」：只取整数部分（去尾法）")
-    elif re.search(r"几分之几", text):
-        hints.append("求几分之几则答案写分数如1/4")
-    elif "fraction" in tags:
+        hints.append("「至少/最少」有余数则+1")
+    if "at_most" in tags:
+        hints.append("「至多/最多」只取整数部分")
+    if "fraction" in tags:
         hints.append("分数题答案写分数如3/5或小数")
-    elif re.search(r"一步.*分米|分米.*步", text):
-        hints.append("步数×每步分米，再÷10换成米")
-    elif "unit_convert" in tags:
-        hints.append("注意单位：1米=10分米，1小时=60分钟，1吨=1000千克")
-    if re.search(r"利率|利润率|出油率", text) and len(hints) < 2:
-        hints.append("利润率/出油率答案写百分数如18.8%")
-    if "average" in tags and re.search(r"分钟|小时", text) and len(hints) < 2:
-        hints.append("速率题：先算单位时间完成量，再乘以总时间")
-
-    hint_text = f"\n提示：{'；'.join(hints[:2])}。" if hints else ""
+    if "unit_convert" in tags:
+        hints.append("注意单位：1小时=60分钟，1吨=1000千克")
+    hint_text = f"\n提示：{'；'.join(hints)}。" if hints else ""
 
     return f"""你是小学数学应用题助手。先列算式再给出最终数字答案（不带单位）。{hint_text}
 
@@ -186,7 +176,7 @@ def build_compact_prompt(question: str | list) -> str:
 
 格式：
 计算：<算式步骤>
-答案：<仅数字、分数或百分数>"""
+答案：<仅数字或分数>"""
 
 
 DIRECT_INSTRUCTION = (

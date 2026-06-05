@@ -15,9 +15,10 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-from cot_core import format_submit_answer, normalize_question
+from cot_core import BEST_PROMPT_MODE, format_submit_answer, normalize_question
 from ollama_client import (
     COT_NUM_CTX,
+    COT_NUM_PREDICT,
     COT_REPEAT_PENALTY,
     COT_TEMPERATURE,
     COT_TOP_P,
@@ -28,10 +29,23 @@ from ollama_client import (
 )
 
 
+def checkpoint_path(output_path: Path) -> Path:
+    return output_path.with_name(output_path.name + ".checkpoint.jsonl")
+
+
 def load_completed_ids(output_path: Path) -> dict[int, str]:
-    if not output_path.exists():
-        return {}
     done: dict[int, str] = {}
+    cp = checkpoint_path(output_path)
+    if cp.exists():
+        with cp.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                row = json.loads(line)
+                done[int(row["id"])] = str(row["ret"])
+    if not output_path.exists():
+        return done
     with output_path.open("r", encoding="utf-8", newline="") as f:
         reader = csv.reader(f)
         header = next(reader, None)
@@ -46,6 +60,12 @@ def load_completed_ids(output_path: Path) -> dict[int, str]:
                 if len(row) >= 2:
                     done[int(row[0])] = row[1]
     return done
+
+
+def append_checkpoint(output_path: Path, sample_id: int, answer: str) -> None:
+    cp = checkpoint_path(output_path)
+    with cp.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"id": sample_id, "ret": answer}, ensure_ascii=False) + "\n")
 
 
 def write_submission(output_path: Path, results: dict[int, str]) -> None:
@@ -71,16 +91,22 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=COT_TEMPERATURE)
     parser.add_argument("--top-p", type=float, default=COT_TOP_P)
     parser.add_argument("--num-ctx", type=int, default=COT_NUM_CTX)
+    parser.add_argument("--num-predict", type=int, default=COT_NUM_PREDICT)
     parser.add_argument("--repeat-penalty", type=float, default=COT_REPEAT_PENALTY)
     parser.add_argument(
         "--prompt-mode",
         type=str,
-        default="compact",
+        default=BEST_PROMPT_MODE,
         choices=["direct", "compact", "full"],
         help="direct=赛题格式直接输出; compact/full=CoT",
     )
-    parser.add_argument("--workers", type=int, default=2, help="Concurrent requests (local model: 1-4)")
-    parser.add_argument("--save-every", type=int, default=50)
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Concurrent HTTP requests; use 2-4 only if OLLAMA_NUM_PARALLEL>=workers",
+    )
+    parser.add_argument("--save-every", type=int, default=500, help="Rewrite submit.csv every N samples")
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--start", type=int, default=0)
     args = parser.parse_args()
@@ -92,6 +118,7 @@ def main() -> None:
         top_p=args.top_p,
         num_ctx=args.num_ctx,
         repeat_penalty=args.repeat_penalty,
+        num_predict=args.num_predict,
         prompt_mode=args.prompt_mode,  # type: ignore[arg-type]
     )
 
@@ -116,7 +143,8 @@ def main() -> None:
     print(f"Model:   {config.model}, prompt_mode: {config.prompt_mode}")
     print(
         f"Params:  temperature={config.temperature}, top_p={config.top_p}, "
-        f"num_ctx={config.num_ctx}, repeat_penalty={config.repeat_penalty}"
+        f"num_ctx={config.num_ctx}, num_predict={config.num_predict}, "
+        f"repeat_penalty={config.repeat_penalty}"
     )
     print(f"Workers: {args.workers}")
     print(f"Total: {len(test_data)}, done: {len(results)}, pending: {len(pending)}")
@@ -136,12 +164,17 @@ def main() -> None:
                 write_submission(args.output, results)
             completed_since_save = 0
 
+    def record(sample_id: int, answer: str) -> None:
+        nonlocal completed_since_save
+        with lock:
+            results[sample_id] = answer
+            append_checkpoint(args.output, sample_id, answer)
+            completed_since_save += 1
+
     if args.workers <= 1:
         for row in tqdm(pending, desc="CoT inference"):
             sample_id, answer = infer_one(row, config=config)
-            with lock:
-                results[sample_id] = answer
-                completed_since_save += 1
+            record(sample_id, answer)
             save_if_needed()
     else:
         with ThreadPoolExecutor(max_workers=args.workers) as pool:
@@ -150,9 +183,7 @@ def main() -> None:
             }
             for fut in tqdm(as_completed(futures), total=len(futures), desc="CoT inference"):
                 sample_id, answer = fut.result()
-                with lock:
-                    results[sample_id] = answer
-                    completed_since_save += 1
+                record(sample_id, answer)
                 save_if_needed()
 
     save_if_needed(force=True)

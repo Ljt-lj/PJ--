@@ -10,6 +10,9 @@ from dataclasses import dataclass
 from typing import Literal
 
 from cot_core import (
+    BEST_PROMPT_MODE,
+    BEST_TEMPERATURE,
+    BEST_TOP_P,
     build_direct_messages,
     build_system_prompt,
     extract_answer,
@@ -20,10 +23,12 @@ from cot_core import (
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_MODEL = "qwen2.5:0.5b-instruct"
 
-COT_TEMPERATURE = 0.0
-COT_TOP_P = 1.0
-COT_NUM_CTX = 4096
+COT_TEMPERATURE = BEST_TEMPERATURE
+COT_TOP_P = BEST_TOP_P
+COT_NUM_CTX = 2048
+COT_NUM_PREDICT = 96
 COT_REPEAT_PENALTY = 1.1
+COT_STOP = ["\n\n", "问题：", "示例："]
 
 PromptMode = Literal["direct", "compact", "full"]
 
@@ -36,20 +41,23 @@ class OllamaConfig:
     top_p: float = COT_TOP_P
     num_ctx: int = COT_NUM_CTX
     repeat_penalty: float = COT_REPEAT_PENALTY
-    num_predict: int = 256
-    prompt_mode: PromptMode = "compact"
+    num_predict: int = COT_NUM_PREDICT
+    prompt_mode: PromptMode = BEST_PROMPT_MODE  # type: ignore[assignment]
     compact_prompt: bool = True
     timeout: float = 180.0
 
 
 def build_options(config: OllamaConfig) -> dict:
-    return {
+    opts = {
         "temperature": config.temperature,
         "top_p": config.top_p,
         "num_ctx": config.num_ctx,
         "repeat_penalty": config.repeat_penalty,
         "num_predict": config.num_predict,
     }
+    if COT_STOP:
+        opts["stop"] = list(COT_STOP)
+    return opts
 
 
 def build_messages(question: str | list, config: OllamaConfig) -> list[dict[str, str]]:

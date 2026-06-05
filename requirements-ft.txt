@@ -1,0 +1,13 @@
+# GPU fine-tuning dependencies (install on cloud GPU machine)
+torch>=2.1.0
+transformers>=4.40.0
+peft>=0.10.0
+datasets>=2.18.0
+accelerate>=0.28.0
+modelscope>=1.14.0
+sentencepiece>=0.2.0
+protobuf>=3.20.0
+tqdm>=4.66.0
+
+# optional experiment tracking (enable with --swanlab)
+# swanlab>=0.3.0

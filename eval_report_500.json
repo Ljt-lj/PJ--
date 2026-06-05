@@ -1,0 +1,53 @@
+{
+  "total": 500,
+  "correct": 205,
+  "wrong": 295,
+  "accuracy": 0.41,
+  "by_tag": {
+    "at_least": {
+      "total": 11,
+      "correct": 5,
+      "accuracy": 0.4545
+    },
+    "at_most": {
+      "total": 10,
+      "correct": 4,
+      "accuracy": 0.4
+    },
+    "average": {
+      "total": 54,
+      "correct": 27,
+      "accuracy": 0.5
+    },
+    "decimal": {
+      "total": 63,
+      "correct": 13,
+      "accuracy": 0.2063
+    },
+    "fraction": {
+      "total": 53,
+      "correct": 14,
+      "accuracy": 0.2642
+    },
+    "general": {
+      "total": 79,
+      "correct": 33,
+      "accuracy": 0.4177
+    },
+    "ratio": {
+      "total": 108,
+      "correct": 41,
+      "accuracy": 0.3796
+    },
+    "remainder": {
+      "total": 56,
+      "correct": 29,
+      "accuracy": 0.5179
+    },
+    "unit_convert": {
+      "total": 287,
+      "correct": 107,
+      "accuracy": 0.3728
+    }
+  }
+}

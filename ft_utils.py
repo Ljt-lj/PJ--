@@ -1,0 +1,81 @@
+"""Shared helpers for LoRA fine-tuning and PEFT inference."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+from cot_core import format_submit_answer, normalize_question
+
+DEFAULT_MODEL_ID = "Qwen/Qwen2.5-0.5B-Instruct"
+DEFAULT_INSTRUCTION = (
+    "这是小学数学1-6年级的校内题目，无需进行分析，请直接输出数字答案，不带单位。"
+)
+
+
+def normalize_sample(row: dict) -> dict:
+    instruction = str(row.get("instruction") or DEFAULT_INSTRUCTION).strip()
+    question = normalize_question(row["question"])
+    answer = str(row["answer"]).strip()
+    return {
+        "id": row.get("id"),
+        "instruction": instruction,
+        "question": question,
+        "answer": answer,
+    }
+
+
+def build_chat_messages(instruction: str, question: str) -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": instruction},
+        {"role": "user", "content": question},
+    ]
+
+
+IM_END = "<|" + "im_end|>"
+
+
+def clean_model_output(text: str, question: str) -> str:
+    """Strip chat noise and format for competition CSV."""
+    text = str(text).strip()
+    text = text.split(IM_END)[0].strip()
+    text = text.replace("\n", " ").strip()
+    if not text:
+        return "0"
+    for stop in (IM_END, "<|endoftext|>"):
+        text = text.split(stop)[0].strip()
+    m = re.search(r"([+-]?\d+(?:\.\d+)?(?:/\d+)?%?)\s*$", text)
+    if m:
+        text = m.group(1)
+    return format_submit_answer(question, text)
+
+
+def find_latest_checkpoint(output_dir: Path) -> Path:
+    candidates = sorted(
+        output_dir.glob("checkpoint-*"),
+        key=lambda p: int(p.name.split("-")[-1]) if p.name.split("-")[-1].isdigit() else -1,
+    )
+    if not candidates:
+        raise FileNotFoundError(f"No checkpoint-* under {output_dir}")
+    return candidates[-1]
+
+
+def resolve_model_dir(model_id: str, cache_dir: Path) -> Path:
+    """Return local path after ModelScope or HuggingFace download."""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    local = cache_dir / model_id.replace("/", "--")
+    if local.exists() and any(local.iterdir()):
+        return local
+
+    print(f"Downloading model: {model_id}")
+    try:
+        from modelscope import snapshot_download
+
+        path = snapshot_download(model_id, cache_dir=str(cache_dir), revision="master")
+        return Path(path)
+    except Exception as exc:
+        print(f"ModelScope download failed ({exc}), trying HuggingFace Hub...")
+        from huggingface_hub import snapshot_download as hf_download
+
+        path = hf_download(repo_id=model_id, cache_dir=str(cache_dir))
+        return Path(path)

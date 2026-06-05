@@ -1,0 +1,80 @@
+[
+  {
+    "name": "baseline",
+    "params": {
+      "temperature": 0.3,
+      "top_p": 0.9,
+      "num_ctx": 4096,
+      "repeat_penalty": 1.1,
+      "num_predict": 256
+    },
+    "accuracy": 0.28,
+    "correct": 14,
+    "total": 50
+  },
+  {
+    "name": "low_temp",
+    "params": {
+      "temperature": 0.1,
+      "top_p": 0.85,
+      "num_ctx": 4096,
+      "repeat_penalty": 1.1,
+      "num_predict": 256
+    },
+    "accuracy": 0.26,
+    "correct": 13,
+    "total": 50
+  },
+  {
+    "name": "greedy",
+    "params": {
+      "temperature": 0.0,
+      "top_p": 1.0,
+      "num_ctx": 4096,
+      "repeat_penalty": 1.1,
+      "num_predict": 256
+    },
+    "accuracy": 0.36,
+    "correct": 18,
+    "total": 50
+  },
+  {
+    "name": "low_temp_rp12",
+    "params": {
+      "temperature": 0.1,
+      "top_p": 0.9,
+      "num_ctx": 4096,
+      "repeat_penalty": 1.2,
+      "num_predict": 256
+    },
+    "accuracy": 0.2,
+    "correct": 10,
+    "total": 50
+  },
+  {
+    "name": "mid_temp",
+    "params": {
+      "temperature": 0.2,
+      "top_p": 0.9,
+      "num_ctx": 4096,
+      "repeat_penalty": 1.1,
+      "num_predict": 256
+    },
+    "accuracy": 0.24,
+    "correct": 12,
+    "total": 50
+  },
+  {
+    "name": "long_out",
+    "params": {
+      "temperature": 0.1,
+      "top_p": 0.9,
+      "num_ctx": 4096,
+      "repeat_penalty": 1.1,
+      "num_predict": 384
+    },
+    "accuracy": 0.32,
+    "correct": 16,
+    "total": 50
+  }
+]

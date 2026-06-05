@@ -1,0 +1,8 @@
+FROM qwen2.5:0.5b-instruct
+
+# ===== CoT 专用调参 =====
+PARAMETER temperature 0.0
+PARAMETER top_p 1.0
+PARAMETER num_ctx 4096
+PARAMETER repeat_penalty 1.1
+PARAMETER stop ""

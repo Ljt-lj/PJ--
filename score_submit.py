@@ -13,10 +13,15 @@ from cot_core import answers_equal, normalize_question
 
 def load_preds(path: Path, limit: int) -> list[tuple[str, str]]:
     rows: list[tuple[str, str]] = []
-    with path.open("r", encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            rows.append((str(row["id"]), str(row["ret"]).strip()))
+    with path.open("r", encoding="utf-8") as f:
+        for i, line in enumerate(f):
+            line = line.strip()
+            if not line or "," not in line:
+                continue
+            if i == 0 and line.lower().startswith("id,"):
+                continue
+            sid, pred = line.split(",", 1)
+            rows.append((sid.strip(), pred.strip()))
             if limit > 0 and len(rows) >= limit:
                 break
     return rows

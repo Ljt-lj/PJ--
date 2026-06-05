@@ -77,6 +77,11 @@ def main() -> None:
     ]
     if args.dev.exists():
         infer_cmd.extend(["--dev", str(args.dev), "--report", str(args.output_dir / "dev_report.json")])
+    elif (args.output_dir / "dev_holdout.json").exists():
+        infer_cmd.extend([
+            "--dev", str(args.output_dir / "dev_holdout.json"),
+            "--report", str(args.output_dir / "dev_report.json"),
+        ])
     run(infer_cmd)
 
     print("\nPipeline finished.")

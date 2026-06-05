@@ -32,21 +32,24 @@ def build_chat_messages(instruction: str, question: str) -> list[dict[str, str]]
     ]
 
 
+def build_training_prefix(tokenizer, instruction: str, question: str) -> str:
+    messages = build_chat_messages(instruction, question)
+    return tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
+
+
 IM_END = "<|" + "im_end|>"
 
 
-def clean_model_output(text: str, question: str) -> str:
-    """Strip chat noise and format for competition CSV."""
-    text = str(text).strip()
-    text = text.split(IM_END)[0].strip()
+def format_ft_prediction(raw: str, question: str) -> str:
+    """Format direct-answer SFT output (match Math_Solver infer.py)."""
+    text = str(raw).strip()
+    for stop in (IM_END, "<|endoftext|>"):
+        text = text.split(stop)[0].strip()
     text = text.replace("\n", " ").strip()
     if not text:
         return "0"
-    for stop in (IM_END, "<|endoftext|>"):
-        text = text.split(stop)[0].strip()
-    m = re.search(r"([+-]?\d+(?:\.\d+)?(?:/\d+)?%?)\s*$", text)
-    if m:
-        text = m.group(1)
     return format_submit_answer(question, text)
 
 

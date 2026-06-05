@@ -1,16 +1,9 @@
 #!/usr/bin/env python3
-"""
-Generate submit.csv with a LoRA fine-tuned Qwen2.5-0.5B checkpoint.
-
-Example:
-  python ft_infer.py --checkpoint output/qwen-lora/final --test test.json --output submit.csv
-  python ft_infer.py --checkpoint output/qwen-lora/merged --dev dev.json --report dev_report.json
-"""
+"""Generate submit.csv with fine-tuned Qwen2.5-0.5B (no CSV header by default)."""
 
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import sys
 from pathlib import Path
@@ -20,14 +13,13 @@ from peft import PeftModel
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from cot_core import answers_equal, extract_answer, normalize_question
+from cot_core import answers_equal, normalize_question
 from ft_utils import (
     DEFAULT_INSTRUCTION,
     DEFAULT_MODEL_ID,
-    build_chat_messages,
-    clean_model_output,
+    build_training_prefix,
     find_latest_checkpoint,
-    normalize_sample,
+    format_ft_prediction,
     resolve_model_dir,
 )
 
@@ -39,7 +31,6 @@ def require_gpu() -> None:
 
 
 def load_model(checkpoint: Path, base_dir: Path | None = None):
-    """Load merged/full weights, or LoRA adapter on base."""
     dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
     if (checkpoint / "adapter_config.json").exists():
@@ -47,10 +38,7 @@ def load_model(checkpoint: Path, base_dir: Path | None = None):
             raise ValueError("base_dir required for LoRA adapter checkpoint")
         tokenizer = AutoTokenizer.from_pretrained(base_dir, trust_remote_code=True, use_fast=False)
         base = AutoModelForCausalLM.from_pretrained(
-            base_dir,
-            torch_dtype=dtype,
-            device_map="auto",
-            trust_remote_code=True,
+            base_dir, torch_dtype=dtype, device_map="auto", trust_remote_code=True
         )
         model = PeftModel.from_pretrained(base, str(checkpoint))
         model.eval()
@@ -59,34 +47,24 @@ def load_model(checkpoint: Path, base_dir: Path | None = None):
     if (checkpoint / "config.json").exists():
         tokenizer = AutoTokenizer.from_pretrained(checkpoint, trust_remote_code=True, use_fast=False)
         model = AutoModelForCausalLM.from_pretrained(
-            checkpoint,
-            torch_dtype=dtype,
-            device_map="auto",
-            trust_remote_code=True,
+            checkpoint, torch_dtype=dtype, device_map="auto", trust_remote_code=True
         )
         model.eval()
         return model, tokenizer
 
-    raise FileNotFoundError(
-        f"Unrecognized checkpoint layout: {checkpoint} "
-        "(expected adapter_config.json or config.json)"
-    )
+    raise FileNotFoundError(f"Unrecognized checkpoint: {checkpoint}")
 
 
 @torch.inference_mode()
 def predict(model, tokenizer, instruction: str, question: str, max_new_tokens: int) -> str:
-    messages = build_chat_messages(instruction, question)
-    text = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True,
-    )
-    inputs = tokenizer([text], return_tensors="pt").to(model.device)
+    prompt = build_training_prefix(tokenizer, instruction, question)
+    inputs = tokenizer([prompt], return_tensors="pt").to(model.device)
     out = model.generate(
         **inputs,
         max_new_tokens=max_new_tokens,
         do_sample=False,
         pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
+        eos_token_id=tokenizer.eos_token_id,
     )
     gen_ids = out[0][inputs["input_ids"].shape[1] :]
     return tokenizer.decode(gen_ids, skip_special_tokens=True)
@@ -112,11 +90,7 @@ def run_rows(
         instruction = str(row.get("instruction") or DEFAULT_INSTRUCTION)
         question = normalize_question(row["question"])
         raw = predict(model, tokenizer, instruction, question, max_new_tokens)
-        pred = extract_answer(raw)
-        if not pred or pred == "0":
-            pred = clean_model_output(raw, question)
-        else:
-            pred = clean_model_output(pred, question)
+        pred = format_ft_prediction(raw, question)
         preds[sid] = pred
         if has_labels:
             gold = str(row["answer"]).strip()
@@ -134,48 +108,49 @@ def run_rows(
     return preds, report
 
 
-def write_submit(path: Path, preds: dict[str, str]) -> None:
+def write_submit(path: Path, preds: dict[str, str], *, with_header: bool) -> None:
     with path.open("w", encoding="utf-8", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["id", "ret"])
+        if with_header:
+            f.write("id,ret\n")
         for sid in sorted(preds, key=lambda x: int(x) if str(x).isdigit() else x):
-            w.writerow([sid, preds[sid]])
+            f.write(f"{sid},{preds[sid]}\n")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Inference with fine-tuned Qwen2.5-0.5B LoRA")
-    parser.add_argument("--checkpoint", type=Path, default=None, help="LoRA adapter or merged model dir")
+    parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=Path("output/qwen-lora"))
-    parser.add_argument("--base-model", type=Path, default=None, help="Base model dir (auto-detect if omitted)")
+    parser.add_argument("--base-model", type=Path, default=None)
     parser.add_argument("--model-id", type=str, default=DEFAULT_MODEL_ID)
     parser.add_argument("--cache-dir", type=Path, default=Path("models"))
     parser.add_argument("--test", type=Path, default=Path("test.json"))
-    parser.add_argument("--dev", type=Path, default=None, help="Optional labeled JSON for accuracy")
+    parser.add_argument("--dev", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=Path("submit.csv"))
     parser.add_argument("--report", type=Path, default=None)
-    parser.add_argument("--max-new-tokens", type=int, default=64)
+    parser.add_argument("--max-new-tokens", type=int, default=32)
+    parser.add_argument("--with-header", action="store_true", help="Write CSV header row")
     args = parser.parse_args()
 
     require_gpu()
 
     checkpoint = args.checkpoint
     if checkpoint is None:
-        checkpoint = find_latest_checkpoint(args.output_dir)
-    if not checkpoint.exists():
-        raise FileNotFoundError(f"Checkpoint not found: {checkpoint}")
+        merged = args.output_dir / "merged"
+        checkpoint = merged if merged.exists() else args.output_dir / "final"
+        if not checkpoint.exists():
+            checkpoint = find_latest_checkpoint(args.output_dir)
     print(f"Checkpoint: {checkpoint}")
 
     base_dir = args.base_model or resolve_model_dir(args.model_id, args.cache_dir)
-    model, tokenizer = load_model(checkpoint, base_dir if (checkpoint / "adapter_config.json").exists() else None)
+    model, tokenizer = load_model(
+        checkpoint, base_dir if (checkpoint / "adapter_config.json").exists() else None
+    )
 
     if args.dev and args.dev.exists():
         dev_rows = load_json_rows(args.dev)
         _, report = run_rows(
-            dev_rows,
-            model=model,
-            tokenizer=tokenizer,
-            max_new_tokens=args.max_new_tokens,
-            has_labels=True,
+            dev_rows, model=model, tokenizer=tokenizer,
+            max_new_tokens=args.max_new_tokens, has_labels=True,
         )
         print(f"Dev accuracy: {report['accuracy']:.2%} ({report['correct']}/{report['total']})")
         if args.report:
@@ -185,14 +160,11 @@ def main() -> None:
     if args.test.exists():
         test_rows = load_json_rows(args.test)
         preds, _ = run_rows(
-            test_rows,
-            model=model,
-            tokenizer=tokenizer,
-            max_new_tokens=args.max_new_tokens,
-            has_labels=False,
+            test_rows, model=model, tokenizer=tokenizer,
+            max_new_tokens=args.max_new_tokens, has_labels=False,
         )
-        write_submit(args.output, preds)
-        print(f"Submit -> {args.output} ({len(preds)} rows)")
+        write_submit(args.output, preds, with_header=args.with_header)
+        print(f"Submit -> {args.output} ({len(preds)} rows, header={args.with_header})")
     else:
         print(f"Skip test inference: {args.test} not found")
 

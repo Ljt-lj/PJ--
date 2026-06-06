@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-One-click pipeline: LoRA train -> dev eval -> test submit.csv
+CoT LoRA pipeline: build train_cot.json -> train -> dev eval -> submit.csv
 
-Usage (on a GPU cloud machine):
-  pip install -r requirements-ft.txt
-  python run_ft_pipeline.py
+Usage (GPU cloud):
+  python run_cot_ft_pipeline.py --merge-lora
 
-Pass through training args:
-  python run_ft_pipeline.py --epochs 3 --merge-lora --dev-size 500
+Fast start (template CoT labels, no Ollama):
+  python run_cot_ft_pipeline.py --cot-source template --merge-lora
+
+With Ollama CoT generation (better labels, needs local Ollama):
+  python run_cot_ft_pipeline.py --cot-source auto --merge-lora
 """
 
 from __future__ import annotations
@@ -24,14 +26,19 @@ def run(cmd: list[str]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Full fine-tune pipeline")
+    parser = argparse.ArgumentParser(description="CoT LoRA fine-tune pipeline")
     parser.add_argument("--train", type=Path, default=Path("train.json"))
+    parser.add_argument("--train-cot", type=Path, default=Path("train_cot.json"))
     parser.add_argument("--test", type=Path, default=Path("test.json"))
     parser.add_argument("--dev", type=Path, default=Path("dev.json"))
-    parser.add_argument("--output-dir", type=Path, default=Path("output/qwen-lora"))
+    parser.add_argument("--output-dir", type=Path, default=Path("output/qwen-cot-lora"))
     parser.add_argument("--submit", type=Path, default=Path("submit.csv"))
+    parser.add_argument("--skip-build-cot", action="store_true")
     parser.add_argument("--skip-train", action="store_true")
+    parser.add_argument("--rebuild-cot", action="store_true")
     parser.add_argument("--merge-lora", action="store_true")
+    parser.add_argument("--cot-source", choices=("auto", "ollama", "template"), default="template")
+    parser.add_argument("--cot-limit", type=int, default=0, help="Limit CoT build samples (0=all)")
     parser.add_argument("--dev-size", type=int, default=500)
     parser.add_argument("--epochs", type=int, default=5)
     args, extra = parser.parse_known_args()
@@ -39,12 +46,33 @@ def main() -> None:
     root = Path(__file__).resolve().parent
     py = sys.executable
 
+    if not args.skip_build_cot:
+        build_cmd = [
+            py,
+            str(root / "build_cot_train.py"),
+            "--train",
+            str(args.train),
+            "--output",
+            str(args.train_cot),
+            "--source",
+            args.cot_source,
+        ]
+        if args.cot_limit > 0:
+            build_cmd.extend(["--limit", str(args.cot_limit)])
+        if args.rebuild_cot:
+            build_cmd.append("--rebuild")
+        run(build_cmd)
+    elif not args.train_cot.exists():
+        raise FileNotFoundError(f"Missing {args.train_cot}; run without --skip-build-cot")
+
     if not args.skip_train:
         train_cmd = [
             py,
             str(root / "qwen_ft.py"),
+            "--mode",
+            "cot",
             "--train",
-            str(args.train),
+            str(args.train_cot),
             "--output-dir",
             str(args.output_dir),
             "--epochs",
@@ -62,10 +90,14 @@ def main() -> None:
         ckpt = args.output_dir / "final"
         if not ckpt.exists():
             from ft_utils import find_latest_checkpoint
+
             ckpt = find_latest_checkpoint(args.output_dir)
+
     infer_cmd = [
         py,
         str(root / "ft_infer.py"),
+        "--mode",
+        "cot",
         "--checkpoint",
         str(ckpt),
         "--output-dir",
@@ -84,10 +116,10 @@ def main() -> None:
         ])
     run(infer_cmd)
 
-    print("\nPipeline finished.")
+    print("\nCoT pipeline finished.")
+    print(f"  train_cot  -> {args.train_cot}")
     print(f"  submit.csv -> {args.submit}")
-    if args.dev.exists():
-        print(f"  dev report -> {args.output_dir / 'dev_report.json'}")
+    print(f"  dev report -> {args.output_dir / 'dev_report.json'}")
 
 
 if __name__ == "__main__":

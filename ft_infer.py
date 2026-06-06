@@ -15,10 +15,13 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from cot_core import answers_equal, normalize_question
 from ft_utils import (
+    COT_DEFAULT_MAX_NEW_TOKENS,
     DEFAULT_INSTRUCTION,
     DEFAULT_MODEL_ID,
+    build_cot_training_prefix,
     build_training_prefix,
     find_latest_checkpoint,
+    format_cot_prediction,
     format_ft_prediction,
     resolve_model_dir,
 )
@@ -56,8 +59,7 @@ def load_model(checkpoint: Path, base_dir: Path | None = None):
 
 
 @torch.inference_mode()
-def predict(model, tokenizer, instruction: str, question: str, max_new_tokens: int) -> str:
-    prompt = build_training_prefix(tokenizer, instruction, question)
+def predict(model, tokenizer, prompt: str, max_new_tokens: int) -> str:
     inputs = tokenizer([prompt], return_tensors="pt").to(model.device)
     out = model.generate(
         **inputs,
@@ -70,6 +72,18 @@ def predict(model, tokenizer, instruction: str, question: str, max_new_tokens: i
     return tokenizer.decode(gen_ids, skip_special_tokens=True)
 
 
+def build_prompt(tokenizer, mode: str, instruction: str, question: str) -> str:
+    if mode == "cot":
+        return build_cot_training_prefix(tokenizer, question)
+    return build_training_prefix(tokenizer, instruction, question)
+
+
+def format_prediction(mode: str, raw: str, question: str) -> str:
+    if mode == "cot":
+        return format_cot_prediction(raw, question)
+    return format_ft_prediction(raw, question)
+
+
 def load_json_rows(path: Path) -> list[dict]:
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
@@ -80,17 +94,19 @@ def run_rows(
     *,
     model,
     tokenizer,
+    mode: str,
     max_new_tokens: int,
     has_labels: bool,
 ) -> tuple[dict[str, str], dict | None]:
     preds: dict[str, str] = {}
     correct = 0
-    for row in tqdm(rows, desc="FT inference"):
+    for row in tqdm(rows, desc=f"FT inference ({mode})"):
         sid = str(row.get("id", len(preds)))
         instruction = str(row.get("instruction") or DEFAULT_INSTRUCTION)
         question = normalize_question(row["question"])
-        raw = predict(model, tokenizer, instruction, question, max_new_tokens)
-        pred = format_ft_prediction(raw, question)
+        prompt = build_prompt(tokenizer, mode, instruction, question)
+        raw = predict(model, tokenizer, prompt, max_new_tokens)
+        pred = format_prediction(mode, raw, question)
         preds[sid] = pred
         if has_labels:
             gold = str(row["answer"]).strip()
@@ -120,6 +136,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Inference with fine-tuned Qwen2.5-0.5B LoRA")
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=Path("output/qwen-lora"))
+    parser.add_argument("--mode", choices=("direct", "cot"), default="direct")
     parser.add_argument("--base-model", type=Path, default=None)
     parser.add_argument("--model-id", type=str, default=DEFAULT_MODEL_ID)
     parser.add_argument("--cache-dir", type=Path, default=Path("models"))
@@ -127,9 +144,14 @@ def main() -> None:
     parser.add_argument("--dev", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=Path("submit.csv"))
     parser.add_argument("--report", type=Path, default=None)
-    parser.add_argument("--max-new-tokens", type=int, default=32)
+    parser.add_argument("--max-new-tokens", type=int, default=None)
     parser.add_argument("--with-header", action="store_true", help="Write CSV header row")
     args = parser.parse_args()
+
+    if args.max_new_tokens is None:
+        args.max_new_tokens = COT_DEFAULT_MAX_NEW_TOKENS if args.mode == "cot" else 32
+    if args.mode == "cot" and args.output_dir == Path("output/qwen-lora"):
+        args.output_dir = Path("output/qwen-cot-lora")
 
     require_gpu()
 
@@ -139,6 +161,7 @@ def main() -> None:
         checkpoint = merged if merged.exists() else args.output_dir / "final"
         if not checkpoint.exists():
             checkpoint = find_latest_checkpoint(args.output_dir)
+    print(f"Mode: {args.mode}, max_new_tokens: {args.max_new_tokens}")
     print(f"Checkpoint: {checkpoint}")
 
     base_dir = args.base_model or resolve_model_dir(args.model_id, args.cache_dir)
@@ -149,7 +172,7 @@ def main() -> None:
     if args.dev and args.dev.exists():
         dev_rows = load_json_rows(args.dev)
         _, report = run_rows(
-            dev_rows, model=model, tokenizer=tokenizer,
+            dev_rows, model=model, tokenizer=tokenizer, mode=args.mode,
             max_new_tokens=args.max_new_tokens, has_labels=True,
         )
         print(f"Dev accuracy: {report['accuracy']:.2%} ({report['correct']}/{report['total']})")
@@ -160,7 +183,7 @@ def main() -> None:
     if args.test.exists():
         test_rows = load_json_rows(args.test)
         preds, _ = run_rows(
-            test_rows, model=model, tokenizer=tokenizer,
+            test_rows, model=model, tokenizer=tokenizer, mode=args.mode,
             max_new_tokens=args.max_new_tokens, has_labels=False,
         )
         write_submit(args.output, preds, with_header=args.with_header)

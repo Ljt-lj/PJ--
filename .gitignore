@@ -18,6 +18,7 @@ output/
 checkpoint-*/
 merged/
 final/
-dev_holdout.json
+train_cot.json
+train_cot.checkpoint.jsonl
 dev_report.json
 *.log

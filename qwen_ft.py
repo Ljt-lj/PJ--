@@ -21,8 +21,11 @@ from transformers import (
 )
 
 from ft_utils import (
+    COT_DEFAULT_MAX_LENGTH,
     DEFAULT_MODEL_ID,
+    build_cot_training_prefix,
     build_training_prefix,
+    cot_target_for_row,
     normalize_sample,
     resolve_model_dir,
 )
@@ -53,12 +56,17 @@ def load_train_rows(path: Path, dev_size: int, seed: int) -> tuple[list[dict], l
     return train, dev
 
 
-def make_process_func(tokenizer, max_length: int):
+def make_process_func(tokenizer, max_length: int, mode: str):
     def process(example: dict) -> dict | None:
-        prefix = build_training_prefix(tokenizer, example["instruction"], example["question"])
-        answer = example["answer"]
+        if mode == "cot":
+            prefix = build_cot_training_prefix(tokenizer, example["question"])
+            target = cot_target_for_row(example)
+        else:
+            prefix = build_training_prefix(tokenizer, example["instruction"], example["question"])
+            target = example["answer"]
+
         prefix_ids = tokenizer(prefix, add_special_tokens=False)
-        answer_ids = tokenizer(answer, add_special_tokens=False)
+        answer_ids = tokenizer(target, add_special_tokens=False)
         pad_id = tokenizer.pad_token_id or tokenizer.eos_token_id
         eos_id = tokenizer.eos_token_id or pad_id
 
@@ -123,10 +131,11 @@ def merge_and_save(base_dir: Path, adapter_dir: Path, merged_dir: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="LoRA fine-tune Qwen2.5-0.5B on train.json")
     parser.add_argument("--train", type=Path, default=Path("train.json"))
+    parser.add_argument("--mode", choices=("direct", "cot"), default="direct")
     parser.add_argument("--output-dir", type=Path, default=Path("output/qwen-lora"))
     parser.add_argument("--model-id", type=str, default=DEFAULT_MODEL_ID)
     parser.add_argument("--cache-dir", type=Path, default=Path("models"))
-    parser.add_argument("--max-length", type=int, default=512)
+    parser.add_argument("--max-length", type=int, default=None)
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--grad-accum", type=int, default=4)
@@ -147,7 +156,14 @@ def main() -> None:
     if not args.train.exists():
         raise FileNotFoundError(f"Missing {args.train}")
 
+    max_length = args.max_length
+    if max_length is None:
+        max_length = COT_DEFAULT_MAX_LENGTH if args.mode == "cot" else 512
+    if args.mode == "cot" and args.output_dir == Path("output/qwen-lora"):
+        args.output_dir = Path("output/qwen-cot-lora")
+
     train_rows, dev_rows = load_train_rows(args.train, args.dev_size, args.seed)
+    print(f"Mode: {args.mode}, max_length: {max_length}")
     print(f"Train samples: {len(train_rows)}")
     if dev_rows is not None:
         print(f"Dev holdout:   {len(dev_rows)}")
@@ -177,12 +193,18 @@ def main() -> None:
     model = get_peft_model(model, lora)
     model.print_trainable_parameters()
 
-    process = make_process_func(tokenizer, args.max_length)
+    process = make_process_func(tokenizer, max_length, args.mode)
     processed = [x for x in (process(r) for r in train_rows) if x is not None]
     skipped = len(train_rows) - len(processed)
     if skipped:
         print(f"Skipped {skipped} samples (too long even after prefix trim)")
     train_ds = Dataset.from_list(processed)
+
+    dev_ds = None
+    if dev_rows is not None:
+        dev_processed = [x for x in (process(r) for r in dev_rows) if x is not None]
+        dev_ds = Dataset.from_list(dev_processed)
+        print(f"Dev eval set:  {len(dev_processed)} samples")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     if dev_rows is not None:
@@ -204,12 +226,15 @@ def main() -> None:
         fp16=not torch.cuda.is_bf16_supported(),
         report_to="none",
         remove_unused_columns=False,
+        eval_strategy="epoch" if dev_ds is not None else "no",
+        per_device_eval_batch_size=args.batch_size,
     )
 
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_ds,
+        eval_dataset=dev_ds,
         data_collator=DataCollatorForSeq2Seq(tokenizer=tokenizer, padding=True),
         callbacks=maybe_add_swanlab_callback(args.swanlab),
     )

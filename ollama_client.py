@@ -72,7 +72,7 @@ def build_messages(question: str | list, config: OllamaConfig) -> list[dict[str,
     ]
 
 
-def chat(
+def chat_content(
     question: str | list,
     *,
     config: OllamaConfig,
@@ -100,12 +100,23 @@ def chat(
             with urllib.request.urlopen(req, timeout=config.timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             content = data.get("message", {}).get("content", "")
-            return extract_answer(content)
+            return content.strip()
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError) as exc:
             last_error = exc
             time.sleep(min(retry_delay * (2**attempt), 30))
 
     raise RuntimeError(f"Ollama call failed after {max_retries} retries: {last_error}")
+
+
+def chat(
+    question: str | list,
+    *,
+    config: OllamaConfig,
+    max_retries: int = 3,
+    retry_delay: float = 2.0,
+) -> str:
+    content = chat_content(question, config=config, max_retries=max_retries, retry_delay=retry_delay)
+    return extract_answer(content)
 
 
 def list_models(base_url: str = DEFAULT_OLLAMA_URL) -> list[str]:

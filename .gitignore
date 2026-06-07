@@ -20,5 +20,8 @@ merged/
 final/
 train_cot.json
 train_cot.checkpoint.jsonl
+train_distill.json
+train_distill.checkpoint.jsonl
+submit_distill.csv
 dev_report.json
 *.log

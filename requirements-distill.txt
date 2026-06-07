@@ -1,0 +1,5 @@
+# DeepSeek distillation (run on any machine with network)
+openai>=1.30.0
+tqdm>=4.66.0
+
+# GPU training: also install requirements-ft.txt on cloud

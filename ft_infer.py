@@ -151,7 +151,11 @@ def main() -> None:
     if args.max_new_tokens is None:
         args.max_new_tokens = COT_DEFAULT_MAX_NEW_TOKENS if args.mode == "cot" else 32
     if args.mode == "cot" and args.output_dir == Path("output/qwen-lora"):
-        args.output_dir = Path("output/qwen-cot-lora")
+        ck = str(args.checkpoint or "")
+        if "distill" in ck:
+            args.output_dir = Path("output/qwen-distill-lora")
+        else:
+            args.output_dir = Path("output/qwen-cot-lora")
 
     require_gpu()
 

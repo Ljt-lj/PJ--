@@ -160,7 +160,11 @@ def main() -> None:
     if max_length is None:
         max_length = COT_DEFAULT_MAX_LENGTH if args.mode == "cot" else 512
     if args.mode == "cot" and args.output_dir == Path("output/qwen-lora"):
-        args.output_dir = Path("output/qwen-cot-lora")
+        stem = args.train.stem.lower()
+        if "distill" in stem:
+            args.output_dir = Path("output/qwen-distill-lora")
+        else:
+            args.output_dir = Path("output/qwen-cot-lora")
 
     train_rows, dev_rows = load_train_rows(args.train, args.dev_size, args.seed)
     print(f"Mode: {args.mode}, max_length: {max_length}")

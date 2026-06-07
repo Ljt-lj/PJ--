@@ -5,6 +5,7 @@ __pycache__/
 venv/
 submit.csv
 submit.csv.checkpoint.jsonl
+#submit_distill_best.csv
 submit_cot.csv
 eval_preds.csv
 dev.json
